@@ -1,0 +1,82 @@
+frag_-De-Frag
+/*
+
+					Fragmentation 
+
+			Auther Selam Melesew , 8/15/2022
+Index fragmentation is when the pages are not contiguous, and thus the disk access requires more operations. This internal fragmentation occurs when inside the data file the logical ordering no longer matches the physical ordering of the index pages. Sometimes when the pages are out of order, this can result in wasted space , with even one entire extent containing one record on a page.Data can be spread out over many extents without any order to them. Before we decide that what we can we do to defragment an index,it is required to analyze the indexes to find out the degree of fragmentation. We can use sys.dm_db_index_physical_statsdmv to find out the degree to which indexes has been fragmentated. Fill Factor
+
+An index’s fill factor specifies the percentage that the index data pages on disk are filled when the index is first created. An index fill factor set to 0 or 100 percent will cause each index data page to be completely filled up. This is ideal from a disk capacity standpoint because there is no wasted space with data pages that are not fully allocated. However, this is not ideal from a SQL Server performance perspective regarding data updates (inserts, updates, and deletes). If you create a clustered index that has a fill factor of 100 percent, every time a record is inserted, deleted, or even modified, page splits can occur because there is likely no room on the existing index data page to write the change. Page splits increase I/O and can dramatically degrade SQL Server performance.
+
+A lower fill factor will reduce the number of page splits. However, it is easy to react by simply applying a fill factor of, say, 50 percent to reduce page splits in a highly transactional system. The problem with this approach is that by doing this, you have in effect doubled the amount of data required to read and cache index information for a table. So, in improving write performance, you have potentially degraded read performance.The trick is to find the right balance between read and write performance by optimizing the fill factor settings for each index.
+
+				If your database is read-only (low number of updates), use a fill factor of 100 percent or 0 percent.
+				If your database is write-intensive (writes greatly exceed reads), use a fill factor somewhere between 50 percent and 70 percent.
+				If your database is both read- and write-intensive, start with a fill factor of 80 percent to 90 percent.
+The page split is moving the data from one page to a new one, and the span is the result. Although page splits are a normally occurring process in an OLTP system, too many page splits can cause performance issues that will slow down your system because of fragmentation. Page splits are an expensive operation; therefore, the fewer page splits you have, the better your system will perform.
+
+              Select * from sys.dm_os_performance_counters where counter_name = 'page splits/sec'---to track page split 
+/ --STEP 1 USE MKT GO SELECT DB_NAME(i.database_id) AS DbName , SCHEMA_NAME(o.schema_id) AS SchemaName , OBJECT_NAME(i.object_id) AS TableName , si.Name AS IndexName , avg_fragmentation_in_percent AS PageFragmentation -- I put it here under a new column name just to see it at the beginning , si.is_unique, si.is_primary_key, si.fill_factor , i. FROM sys.dm_db_index_physical_stats ( -- Does not show up in SSMS DB_ID('MKT') -- database_id , NULL -- object_id , NULL -- index_id , NULL -- partition_number , NULL -- Mode: Valid inputs are DEFAULT, NULL, LIMITED, SAMPLED, or DETAILED. The default (NULL) is LIMITED. ) i JOIN sys.objects o ON i.object_id = o.object_id JOIN sys.indexes si ON i.index_id = si.index_id AND si.object_id = o.object_id WHERE OBJECTPROPERTY(o.object_id, 'IsMSShipped') = 0 AND OBJECTPROPERTY(o.object_id, 'IsTable') = 1 -- ORDER BY DbName, SchemaName, TableName, si.index_id ORDER BY DbName, avg_fragmentation_in_percent DESC, fragment_count DESC
+
+---DBCC SHOWCONTIG ('your table name')-- to get a report about Frag in each tbl. We can take this report as a banch mark report .
+
+DBCC SHOWCONTIG (xSOHeaderExt)
+
+--STEP 2 /*Defragmentation is the process of Resolving the fragmentation of indexes which are judged as highly fragmented indexes and causing slowness. We basically have 2 methods by which we can remove fragmentation.
+
+Rebuild Index--Rebuilding indexes completely drops and re-creates the database indexes.
+	Technically, rebuilding consists of copying, renaming, and dropping the old one, internally
+	Keep in mind when running rebuild indexes on your database and tables in production, it is an I/O
+	and resource-intensive operation and should typically be scheduled during off-peak business 
+	hours or during scheduled maintenance/outage windows*/
+
+			USE MKT
+			GO 
+			ALTER INDEX All 
+			ON --Tablename 
+			REBUILD 
+	-------------------------///---------------
+			ALTER INDEX Index_Name 
+			ON Table_Name 
+			REBUILD WITH(ONLINE=ON) | WITH(ONLINE=ON)
+
+/*Reorganize Index.The index reorganization process physically reorganizes the leaf nodes of the index. 
+	Reorganizing an index uses minimal system resources.
+	reorganizing indexes does not require any additional disk space but requires log space.
+	Because reorganizing indexes is a fully logged transaction, the log can potentially grow.*/
+
+			USE MKT
+			GO 
+			ALTER INDEX All 
+			ON --Tablename 
+			REORGANIZE 
+			GO
+--STEP 3 ---Finish up by runing the first query to see the fragmentation
+
+	USE MKT
+	GO 
+	SELECT DB_NAME(i.database_id) AS DbName
+		, SCHEMA_NAME(o.schema_id) AS SchemaName
+		, OBJECT_NAME(i.object_id) AS TableName
+		, si.Name AS IndexName
+		, avg_fragmentation_in_percent AS PageFragmentation -- I put it here under a new column name just to see it at the beginning
+		, si.is_unique, si.is_primary_key, si.fill_factor
+		, i.*
+	FROM sys.dm_db_index_physical_stats ( -- Does not show up in SSMS
+		DB_ID('MKT') -- database_id
+		, NULL -- object_id
+		, NULL -- index_id 
+		, NULL -- partition_number
+		, NULL -- Mode: Valid inputs are DEFAULT, NULL, LIMITED, SAMPLED, or DETAILED. The default (NULL) is LIMITED. 
+	) i JOIN sys.objects o
+		ON i.object_id = o.object_id
+	JOIN sys.indexes si
+		ON i.index_id = si.index_id
+		AND si.object_id = o.object_id
+	WHERE OBJECTPROPERTY(o.object_id, 'IsMSShipped') = 0
+		AND  OBJECTPROPERTY(o.object_id, 'IsTable') = 1
+	-- ORDER BY DbName, SchemaName, TableName, si.index_id
+	ORDER BY DbName, avg_fragmentation_in_percent DESC, fragment_count DESC
+--Or Run DBCC SHOWCONTIG () to record the change in the tbl.
+
+------------------------------------------///------------------------------------
